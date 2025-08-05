@@ -124,20 +124,20 @@ def render_email(papers:list[ArxivPaper]):
         return framework.replace('__CONTENT__', get_empty_html())
     
     for p in tqdm(papers,desc='Rendering Email'):
-        rate = get_stars(p.score)
+        rate = 3
         authors = [a.name for a in p.authors[:5]]
         authors = ', '.join(authors)
         if len(p.authors) > 5:
             authors += ', ...'
         if p.affiliations is not None:
-            affiliations = p.affiliations[:5]
-            affiliations = ', '.join(affiliations)
-            if len(p.affiliations) > 5:
-                affiliations += ', ...'
+            affiliations = p.affiliations
+            # affiliations = ', '.join(affiliations)
+            # if len(p.affiliations) > 5:
+            #     affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors,rate,p.arxiv_id ,p.tldr, p.pdf_url, p.code_url, affiliations))
-        time.sleep(10)
+        parts.append(get_block_html(p.title, authors,rate,p.arxiv_id ,p.tldr, p.pdf_url, None, affiliations))
+        # time.sleep(10)
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
     return framework.replace('__CONTENT__', content)
@@ -163,4 +163,16 @@ def send_email(sender:str, receiver:str, password:str,smtp_server:str,smtp_port:
 
     server.login(sender, password)
     server.sendmail(sender, [receiver], msg.as_string())
+    server.quit()
+
+
+if __name__ == '__main__':
+    smtp_server = 'smtp.gmail.com'
+    smtp_port = 587
+    server = smtplib.SMTP(smtp_server, smtp_port)
+    server.starttls()
+    try:
+        server.login('huohuangcw@gmail.com', 'rsuq ccue ixma hkwo')
+    except Exception as e:
+        logger.error(f"Failed to login. {e}")
     server.quit()

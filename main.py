@@ -100,12 +100,12 @@ def add_argument(*args, **kwargs):
 
 if __name__ == '__main__':
     
-    add_argument('--zotero_id', type=str, help='Zotero user ID')
-    add_argument('--zotero_key', type=str, help='Zotero API key')
+    add_argument('--zotero_id', type=str, help='Zotero user ID', default='10271528')
+    add_argument('--zotero_key', type=str, default='sZMOJevcbcnZVFxTH8ShPGUS')
     add_argument('--zotero_ignore',type=str,help='Zotero collection to ignore, using gitignore-style pattern.')
     add_argument('--send_empty', type=bool, help='If get no arxiv paper, send empty email',default=False)
-    add_argument('--max_paper_num', type=int, help='Maximum number of papers to recommend',default=100)
-    add_argument('--arxiv_query', type=str, help='Arxiv search query')
+    add_argument('--max_paper_num', type=int, help='Maximum number of papers to recommend',default=-1)
+    add_argument('--arxiv_query', type=str, help='Arxiv search query',default='cs.AI+cs.CV+cs.LG+cs.CL')
     add_argument('--smtp_server', type=str, help='SMTP server')
     add_argument('--smtp_port', type=int, help='SMTP port')
     add_argument('--sender', type=str, help='Sender email address')
@@ -181,6 +181,6 @@ if __name__ == '__main__':
 
     html = render_email(papers)
     logger.info("Sending email...")
-    send_email(args.sender, args.receiver, args.sender_password, args.smtp_server, args.smtp_port, html)
+    send_email("huohuangcw@gmail.com", "huohuangcw@gmail.com", "rsuq ccue ixma hkwo", "smtp.gmail.com", 587, html)
     logger.success("Email sent successfully! If you don't receive the email, please check the configuration and the junk box.")
 
