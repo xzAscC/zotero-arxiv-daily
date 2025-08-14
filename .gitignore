@@ -17,3 +17,9 @@ test.ipynb
 logs
 models
 test-compose.yml
+
+# database
+*.db
+
+# jupyter notebook
+*.ipynb

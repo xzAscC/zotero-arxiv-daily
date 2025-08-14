@@ -2,18 +2,20 @@ import arxiv
 import os
 import sys
 from pyzotero import zotero
-from recommender import rerank_paper
-from construct_email import render_email, send_email
+from src.recommender import rerank_paper
+from src.construct_email import render_email, send_email
 from gitignore_parser import parse_gitignore
 from tempfile import mkstemp
-from paper import ArxivPaper
-from llm import set_global_llm
+from src.paper import ArxivPaper
+from src.llm import set_global_llm
+from src.database import CorpusDatabase
 import feedparser
 
-from config import config
+from src.config import config
 from dotenv import load_dotenv
 from tqdm import tqdm
-from loguru import logger
+from src.logger import setup_logger
+from typing import Optional, List
 
 load_dotenv(override=True)
 ZOTERO_ID = os.getenv("ZOTERO_ID")
@@ -23,39 +25,110 @@ RECEIVER = os.getenv("RECEIVER")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 
 
-def get_zotero_corpus(id: str, key: str) -> list[dict]:
+def get_zotero_corpus(id: str, key: str, save_to_db: bool = True) -> list[dict]:
+    """
+    Retrieve Zotero corpus and optionally save to local database.
+
+    Args:
+        id: Zotero user ID
+        key: Zotero API key
+        save_to_db: Whether to save corpus to local database
+
+    Returns:
+        Filtered corpus with abstracts
+    """
     zot = zotero.Zotero(id, "user", key)
     collections = zot.everything(zot.collections())
     collections = {c["key"]: c for c in collections}
+
+    # Get all items
     corpus = zot.everything(
-        zot.items(itemType="conferencePaper || journalArticle || preprint")
+        zot.items(
+            itemType="conferencePaper || journalArticle || preprint || WebPage || Book"
+        )
     )
-    corpus = [c for c in corpus if c["data"]["abstractNote"] != ""]
 
-    def get_collection_path(col_key: str) -> str:
-        if p := collections[col_key]["data"]["parentCollection"]:
-            return get_collection_path(p) + "/" + collections[col_key]["data"]["name"]
-        else:
-            return collections[col_key]["data"]["name"]
+    # Filter to only include items with abstracts
+    corpus_with_abstracts = [c for c in corpus if c["data"]["abstractNote"] != ""]
 
-    for c in corpus:
-        paths = [get_collection_path(col) for col in c["data"]["collections"]]
+    logger.info(
+        f"Retrieved {len(corpus)} total items, {len(corpus_with_abstracts)} have abstracts"
+    )
+    # Add collection paths
+    for c in corpus_with_abstracts:
+        paths = [
+            get_collection_path(collections, col) for col in c["data"]["collections"]
+        ]
         c["paths"] = paths
-    return corpus
+
+    # Save to database if requested
+    if save_to_db:
+        # TODO: load only different items and save the different ones
+        try:
+            db = CorpusDatabase()
+            stored_count = db.store_corpus(corpus_with_abstracts)
+            logger.info(f"Successfully stored {stored_count} items in local database")
+
+            # Get database statistics
+            stats = db.get_corpus_stats()
+            logger.info(f"Database stats: {stats}")
+
+        except Exception as e:
+            logger.error(f"Failed to save corpus to database: {e}")
+    return corpus_with_abstracts
 
 
-def filter_corpus(corpus: list[dict], pattern: str) -> list[dict]:
-    _, filename = mkstemp()
-    with open(filename, "w") as file:
-        file.write(pattern)
-    matcher = parse_gitignore(filename, base_dir="./")
-    new_corpus = []
-    for c in corpus:
-        match_results = [matcher(p) for p in c["paths"]]
-        if not any(match_results):
-            new_corpus.append(c)
-    os.remove(filename)
-    return new_corpus
+def get_collection_path(collections: dict, col_key: str) -> str:
+    """Get the full path of a collection."""
+    if p := collections[col_key]["data"]["parentCollection"]:
+        return (
+            get_collection_path(collections, p)
+            + "/"
+            + collections[col_key]["data"]["name"]
+        )
+    else:
+        return collections[col_key]["data"]["name"]
+
+
+def load_corpus_from_db(limit: Optional[int] = None) -> list[dict]:
+    """
+    Load corpus from local database.
+
+    Args:
+        limit: Maximum number of items to return
+
+    Returns:
+        List of corpus items from database
+    """
+    try:
+        db = CorpusDatabase()
+        corpus = db.get_corpus_with_abstracts(limit=limit)
+        logger.info(f"Loaded {len(corpus)} items from local database")
+        return corpus
+    except Exception as e:
+        logger.error(f"Failed to load corpus from database: {e}")
+        return []
+
+
+def search_corpus_in_db(query: str, search_fields: List[str] = None) -> list[dict]:
+    """
+    Search corpus in local database.
+
+    Args:
+        query: Search query string
+        search_fields: Fields to search in (default: title, abstract)
+
+    Returns:
+        List of matching corpus items
+    """
+    try:
+        db = CorpusDatabase()
+        results = db.search_corpus(query, search_fields)
+        logger.info(f"Found {len(results)} items matching query: {query}")
+        return results
+    except Exception as e:
+        logger.error(f"Failed to search corpus in database: {e}")
+        return []
 
 
 def get_arxiv_paper(query: str, debug: bool = False) -> list[ArxivPaper]:
@@ -92,32 +165,10 @@ def get_arxiv_paper(query: str, debug: bool = False) -> list[ArxivPaper]:
     return papers
 
 
-def add_argument(*args, **kwargs):
-    def get_env(key: str, default=None):
-        # handle environment variables generated at Workflow runtime
-        # Unset environment variables are passed as '', we should treat them as None
-        v = os.environ.get(key)
-        if v == "" or v is None:
-            return default
-        return v
-
-    parser.add_argument(*args, **kwargs)
-    arg_full_name = kwargs.get("dest", args[-1][2:])
-    env_name = arg_full_name.upper()
-    env_value = get_env(env_name)
-    if env_value is not None:
-        # convert env_value to the specified type
-        if kwargs.get("type") == bool:
-            env_value = env_value.lower() in ["true", "1"]
-        else:
-            env_value = kwargs.get("type")(env_value)
-        parser.set_defaults(**{arg_full_name: env_value})
-
-
 if __name__ == "__main__":
 
     args = config()
-
+    logger = setup_logger(args.debug)
     if args.debug:
         logger.remove()
         logger.add(sys.stdout, level="DEBUG")
@@ -127,13 +178,13 @@ if __name__ == "__main__":
         logger.add(sys.stdout, level="INFO")
 
     logger.info("Retrieving Zotero corpus...")
+    
+    # TODO: save different items only and load items from database
     corpus = get_zotero_corpus(ZOTERO_ID, ZOTERO_KEY)
     logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
-    if args.zotero_ignore:
-        logger.info(f"Ignoring papers in:\n {args.zotero_ignore}...")
-        corpus = filter_corpus(corpus, args.zotero_ignore)
-        logger.info(f"Remaining {len(corpus)} papers after filtering.")
+
     logger.info("Retrieving Arxiv papers...")
+    # TODO: start from there
     papers = get_arxiv_paper(args.arxiv_query, args.debug)
     if len(papers) == 0:
         logger.info(
