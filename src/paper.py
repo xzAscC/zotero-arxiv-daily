@@ -202,20 +202,20 @@ class ArxivPaper:
 
     @property
     def affiliations(self) -> Optional[list[str]]:
-        if self.tex is not None:
-            content = self.tex.get("all")
-            if content is None:
-                content = "\n".join(self.tex.values())
-            #search for affiliations
-            possible_regions = [r'\\author.*?\\maketitle',r'\\begin{document}.*?\\begin{abstract}']
-            matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
-            match = next((m for m in matches if m), None)
-            if match:
-                information_region = match.group(0)
-                return information_region
-            else:
-                logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: No author information found.")
-                return None
+        # if self.tex is not None:
+        #     content = self.tex.get("all")
+        #     if content is None:
+        #         content = "\n".join(self.tex.values())
+        #     #search for affiliations
+        #     possible_regions = [r'\\author.*?\\maketitle',r'\\begin{document}.*?\\begin{abstract}']
+        #     matches = [re.search(p, content, flags=re.DOTALL) for p in possible_regions]
+        #     match = next((m for m in matches if m), None)
+        #     if match:
+        #         information_region = match.group(0)
+        #         return information_region
+        #     else:
+        #         logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: No author information found.")
+        #         return None
             # prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
             # # use gpt-4o tokenizer for estimation
             # enc = tiktoken.encoding_for_model("gpt-4o")
@@ -241,4 +241,4 @@ class ArxivPaper:
             # except Exception as e:
             #     logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
             #     return None
-            return affiliations
+        return None
