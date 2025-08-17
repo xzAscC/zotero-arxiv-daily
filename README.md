@@ -68,9 +68,8 @@ Each email includes:
 - **Paper Title**: Clear, prominent display
 - **Authors**: Formatted author list
 - **arXiv ID**: Direct link to paper
-- **Abstract**: Concise summary (TLDR)
+- **Abstract**: Abstract of the paper
 - **PDF Link**: Direct download button
-- **Unsubscribe Instructions**: Easy opt-out process
 
 ## TODO
 - [ ] Local Zotero library support
