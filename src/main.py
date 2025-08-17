@@ -18,9 +18,6 @@ SENDER = os.getenv("SENDER")
 RECEIVER = os.getenv("RECEIVER")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
 
-
-
-
 if __name__ == "__main__":
 
     args = config()
@@ -40,7 +37,12 @@ if __name__ == "__main__":
     logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
 
     logger.info("Retrieving Arxiv papers...")
-    papers = get_arxiv_paper(args.arxiv_query, False)
+    papers = get_arxiv_paper(args.arxiv_query, args.debug)
+    if args.max_paper_num == -1:
+        logger.info(f"Retrieved {len(papers)} papers from Arxiv.")
+    else:
+        logger.info(f"Retrieved {max(args.max_paper_num, len(papers))} papers from Arxiv.")
+
     if len(papers) == 0:
         logger.info(
             "No new papers found. Yesterday maybe a holiday and no one submit their work :). If this is not the case, please check the ARXIV_QUERY."
@@ -50,19 +52,8 @@ if __name__ == "__main__":
     else:
         logger.info("Reranking papers...")
         papers = rerank_paper(papers, corpus)
-        # if args.max_paper_num != -1:
-        #     papers = papers[: args.max_paper_num]
-        # if args.use_llm_api:
-        #     logger.info("Using OpenAI API as global LLM.")
-        #     set_global_llm(
-        #         api_key=args.openai_api_key,
-        #         base_url=args.openai_api_base,
-        #         model=args.model_name,
-        #         lang=args.language,
-        #     )
-        # else:
-        #     logger.info("Using Local LLM as global LLM.")
-        #     set_global_llm(lang=args.language)
+        if args.max_paper_num != -1:
+            papers = papers[: args.max_paper_num]
 
     html = render_email(papers)
     logger.info("Sending email...")

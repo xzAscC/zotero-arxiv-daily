@@ -1,10 +1,11 @@
-
 import arxiv
 import tarfile
 import re
 import requests
-from loguru import logger
 import feedparser
+
+import numpy as np
+from loguru import logger
 from tqdm import tqdm
 from database import CorpusDatabase
 from typing import Optional
@@ -14,6 +15,9 @@ from contextlib import ExitStack
 from urllib.error import HTTPError
 from requests.adapters import HTTPAdapter, Retry
 from pyzotero import zotero
+from sentence_transformers import SentenceTransformer
+from paper import ArxivPaper
+from datetime import datetime
 
 
 class ArxivPaper:
@@ -279,6 +283,7 @@ def get_arxiv_paper(query: str, debug: bool = False) -> list[ArxivPaper]:
     if "Feed error for query" in feed.feed.title:
         raise Exception(f"Invalid ARXIV_QUERY: {query}.")
     if not debug:
+        # TODO: why not just use the feed directly, compared with arxiv.Search?
         papers = []
         all_paper_ids = [
             i.id.removeprefix("oai:arXiv.org:")
@@ -371,3 +376,30 @@ def get_collection_path(collections: dict, col_key: str) -> str:
         )
     else:
         return collections[col_key]["data"]["name"]
+
+
+def rerank_paper(
+    candidate: list[ArxivPaper],
+    corpus: list[dict],
+    model: str = "avsolatorio/GIST-small-Embedding-v0",
+) -> list[ArxivPaper]:
+    # TODO: rewrite the ranker function with RAG and local zotero corpus
+    encoder = SentenceTransformer(model)
+    # sort corpus by date, from newest to oldest
+    corpus = sorted(
+        corpus,
+        key=lambda x: datetime.strptime(x["data"]["dateAdded"], "%Y-%m-%dT%H:%M:%SZ"),
+        reverse=True,
+    )
+    time_decay_weight = 1 / (1 + np.log10(np.arange(len(corpus)) + 1))
+    time_decay_weight = time_decay_weight / time_decay_weight.sum()
+    corpus_feature = encoder.encode([paper["data"]["abstractNote"] for paper in corpus])
+    candidate_feature = encoder.encode([paper.summary for paper in candidate])
+    sim = encoder.similarity(
+        candidate_feature, corpus_feature
+    )  # [n_candidate, n_corpus]
+    scores = (sim * time_decay_weight).sum(axis=1) * 10  # [n_candidate]
+    for s, c in zip(scores, candidate):
+        c.score = s.item()
+    candidate = sorted(candidate, key=lambda x: x.score, reverse=True)
+    return candidate
