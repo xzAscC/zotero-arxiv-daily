@@ -1,7 +1,5 @@
 import os
 import sys
-from src.recommender import rerank_paper
-from src.construct_email import render_email, send_email
 from gitignore_parser import parse_gitignore
 from tempfile import mkstemp
 from dotenv import load_dotenv
@@ -9,7 +7,8 @@ from typing import Optional, List
 
 from src.logger import setup_logger
 from src.config import config
-from src.paper import get_zotero_corpus, get_arxiv_paper
+from src.paper import get_zotero_corpus, get_arxiv_paper, rerank_paper
+from src.construct_email import render_email, send_email
 
 load_dotenv(override=True)
 ZOTERO_ID = os.getenv("ZOTERO_ID")
@@ -31,7 +30,7 @@ if __name__ == "__main__":
         logger.add(sys.stdout, level="INFO")
 
     logger.info("Retrieving Zotero corpus...")
-    
+
     # TODO: save different items only and load items from database
     corpus = get_zotero_corpus(ZOTERO_ID, ZOTERO_KEY)
     logger.info(f"Retrieved {len(corpus)} papers from Zotero.")
@@ -41,7 +40,9 @@ if __name__ == "__main__":
     if args.max_paper_num == -1:
         logger.info(f"Retrieved {len(papers)} papers from Arxiv.")
     else:
-        logger.info(f"Retrieved {max(args.max_paper_num, len(papers))} papers from Arxiv.")
+        logger.info(
+            f"Retrieved {max(args.max_paper_num, len(papers))} papers from Arxiv."
+        )
 
     if len(papers) == 0:
         logger.info(
