@@ -1,13 +1,12 @@
-from paper import ArxivPaper
-import math
+from src.paper import ArxivPaper
 from tqdm import tqdm
 from email.header import Header
 from email.mime.text import MIMEText
 from email.utils import parseaddr, formataddr
 import smtplib
 import datetime
-import time
 from loguru import logger
+from typing import Union, List
 
 framework = """
 <!DOCTYPE HTML>
@@ -65,8 +64,17 @@ def get_empty_html() -> str:
 
 
 def get_block_html(
-    title: str, authors: str, arxiv_id: str, abstract: str, pdf_url: str
+    title: str,
+    authors: Union[str, List[str]],
+    arxiv_id: str,
+    abstract: str,
+    pdf_url: str,
 ) -> str:
+    # Format authors properly - join list with commas or use string as is
+    if isinstance(authors, list):
+        authors_formatted = ", ".join(authors)
+    else:
+        authors_formatted = authors or ""
 
     block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
@@ -101,7 +109,7 @@ def get_block_html(
 """
     return block_template.format(
         title=title,
-        authors=authors,
+        authors=authors_formatted,
         arxiv_id=arxiv_id,
         abstract=abstract,
         pdf_url=pdf_url,
