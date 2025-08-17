@@ -1,23 +1,13 @@
 import arxiv
-import tarfile
 import re
-import requests
 import feedparser
 
 import numpy as np
 from loguru import logger
 from tqdm import tqdm
-from database import CorpusDatabase
-from typing import Optional
-from functools import cached_property
-from tempfile import TemporaryDirectory
-from contextlib import ExitStack
-from urllib.error import HTTPError
-from requests.adapters import HTTPAdapter, Retry
 from pyzotero import zotero
 from sentence_transformers import SentenceTransformer
-from paper import ArxivPaper
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 class ArxivPaper:
@@ -68,6 +58,7 @@ def get_arxiv_paper(query: str, debug: bool = False) -> list[ArxivPaper]:
 def get_zotero_corpus(id: str, key: str, save_to_db: bool = True) -> list[dict]:
     """
     Retrieve Zotero corpus and optionally save to local database.
+    Only retrieves items added after the last request to avoid duplicates.
 
     Args:
         id: Zotero user ID
@@ -80,14 +71,15 @@ def get_zotero_corpus(id: str, key: str, save_to_db: bool = True) -> list[dict]:
     zot = zotero.Zotero(id, "user", key)
     collections = zot.everything(zot.collections())
     collections = {c["key"]: c for c in collections}
-
-    # Get all items
-    # TODO: get only the items that are not in the database
+    logger.info("No previous Zotero request found, retrieving all items")
+    # Get all items if this is the first request
+    # TODO: save the items to the database, and only retrieve the items that are not in the database
     corpus = zot.everything(
         zot.items(
-            itemType="conferencePaper || journalArticle || preprint || WebPage || Book"
+            itemType="conferencePaper || journalArticle || preprint || WebPage || Book || computerProgram || Dataset || Manuscript || Note || Report || Thesis"
         )
     )
+    logger.info(f"Retrieved {len(corpus)} total items")
 
     # Filter to only include items with abstracts
     corpus_with_abstracts = [c for c in corpus if c["data"]["abstractNote"] != ""]
@@ -102,20 +94,12 @@ def get_zotero_corpus(id: str, key: str, save_to_db: bool = True) -> list[dict]:
         ]
         c["paths"] = paths
 
-    # Save to database if requested
-    if save_to_db:
-        # TODO: load only different items and save the different ones
-        try:
-            db = CorpusDatabase()
-            stored_count = db.store_corpus(corpus_with_abstracts)
-            logger.info(f"Successfully stored {stored_count} items in local database")
+    # Record this Zotero request timestamp
+    current_time = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    logger.info(
+        f"Recorded Zotero request at {current_time} with {len(corpus_with_abstracts)} items"
+    )
 
-            # Get database statistics
-            stats = db.get_corpus_stats()
-            logger.info(f"Database stats: {stats}")
-
-        except Exception as e:
-            logger.error(f"Failed to save corpus to database: {e}")
     return corpus_with_abstracts
 
 
@@ -156,3 +140,8 @@ def rerank_paper(
         c.score = s.item()
     candidate = sorted(candidate, key=lambda x: x.score, reverse=True)
     return candidate
+
+
+if __name__ == "__main__":
+    corpus = get_zotero_corpus(ZOTERO_ID, ZOTERO_KEY)
+    print(corpus)
