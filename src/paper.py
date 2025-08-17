@@ -1,71 +1,76 @@
-from typing import Optional
-from functools import cached_property
-from tempfile import TemporaryDirectory
+
 import arxiv
 import tarfile
 import re
-import time
-from llm import get_llm
 import requests
-from requests.adapters import HTTPAdapter, Retry
 from loguru import logger
-import tiktoken
+import feedparser
+from tqdm import tqdm
+from database import CorpusDatabase
+from typing import Optional
+from functools import cached_property
+from tempfile import TemporaryDirectory
 from contextlib import ExitStack
 from urllib.error import HTTPError
-
+from requests.adapters import HTTPAdapter, Retry
+from pyzotero import zotero
 
 
 class ArxivPaper:
-    def __init__(self,paper:arxiv.Result):
+    def __init__(self, paper: arxiv.Result):
         self._paper = paper
         self.score = None
-    
+
     @property
     def title(self) -> str:
         return self._paper.title
-    
+
     @property
     def summary(self) -> str:
         return self._paper.summary
-    
+
     @property
     def authors(self) -> list[str]:
         return self._paper.authors
-    
+
     @cached_property
     def arxiv_id(self) -> str:
-        return re.sub(r'v\d+$', '', self._paper.get_short_id())
-    
+        return re.sub(r"v\d+$", "", self._paper.get_short_id())
+
     @property
     def pdf_url(self) -> str:
         return self._paper.pdf_url
-    
+
     @cached_property
     def code_url(self) -> Optional[str]:
         s = requests.Session()
         retries = Retry(total=5, backoff_factor=0.1)
-        s.mount('https://', HTTPAdapter(max_retries=retries))
+        s.mount("https://", HTTPAdapter(max_retries=retries))
         try:
-            paper_list = s.get(f'https://paperswithcode.com/api/v1/papers/?arxiv_id={self.arxiv_id}').json()
+            paper_list = s.get(
+                f"https://paperswithcode.com/api/v1/papers/?arxiv_id={self.arxiv_id}"
+            ).json()
         except Exception as e:
-            logger.debug(f'Error when searching {self.arxiv_id}: {e}')
+            logger.debug(f"Error when searching {self.arxiv_id}: {e}")
             return None
 
-        if paper_list.get('count',0) == 0:
+        if paper_list.get("count", 0) == 0:
             return None
-        paper_id = paper_list['results'][0]['id']
+        paper_id = paper_list["results"][0]["id"]
 
         try:
-            repo_list = s.get(f'https://paperswithcode.com/api/v1/papers/{paper_id}/repositories/').json()
+            repo_list = s.get(
+                f"https://paperswithcode.com/api/v1/papers/{paper_id}/repositories/"
+            ).json()
         except Exception as e:
-            logger.debug(f'Error when searching {self.arxiv_id}: {e}')
+            logger.debug(f"Error when searching {self.arxiv_id}: {e}")
             return None
-        if repo_list.get('count',0) == 0:
+        if repo_list.get("count", 0) == 0:
             return None
-        return repo_list['results'][0]['url']
-    
+        return repo_list["results"][0]["url"]
+
     @cached_property
-    def tex(self) -> dict[str,str]:
+    def tex(self) -> dict[str, str]:
         with ExitStack() as stack:
             tmpdirname = stack.enter_context(TemporaryDirectory())
             # file = self._paper.download_source(dirpath=tmpdirname)
@@ -76,77 +81,101 @@ class ArxivPaper:
                 # 捕获 HTTP 错误
                 if e.code == 404:
                     # 如果是 404 Not Found，说明源文件不存在，这是正常情况
-                    logger.warning(f"Source for {self.arxiv_id} not found (404). Skipping source analysis.")
-                    return None # 直接返回 None，后续依赖 tex 的代码会安全地处理
+                    logger.warning(
+                        f"Source for {self.arxiv_id} not found (404). Skipping source analysis."
+                    )
+                    return None  # 直接返回 None，后续依赖 tex 的代码会安全地处理
                 else:
                     # 如果是其他 HTTP 错误 (如 503)，这可能是临时性问题，值得记录下来
-                    logger.error(f"HTTP Error {e.code} when downloading source for {self.arxiv_id}: {e.reason}")
-                    raise # 重新抛出异常，因为这可能是个需要关注的严重问题
+                    logger.error(
+                        f"HTTP Error {e.code} when downloading source for {self.arxiv_id}: {e.reason}"
+                    )
+                    raise  # 重新抛出异常，因为这可能是个需要关注的严重问题
             try:
                 tar = stack.enter_context(tarfile.open(file))
             except tarfile.ReadError:
-                logger.debug(f"Failed to find main tex file of {self.arxiv_id}: Not a tar file.")
+                logger.debug(
+                    f"Failed to find main tex file of {self.arxiv_id}: Not a tar file."
+                )
                 return None
- 
-            tex_files = [f for f in tar.getnames() if f.endswith('.tex')]
+
+            tex_files = [f for f in tar.getnames() if f.endswith(".tex")]
             if len(tex_files) == 0:
-                logger.debug(f"Failed to find main tex file of {self.arxiv_id}: No tex file.")
+                logger.debug(
+                    f"Failed to find main tex file of {self.arxiv_id}: No tex file."
+                )
                 return None
-            
-            bbl_file = [f for f in tar.getnames() if f.endswith('.bbl')]
-            match len(bbl_file) :
+
+            bbl_file = [f for f in tar.getnames() if f.endswith(".bbl")]
+            match len(bbl_file):
                 case 0:
                     if len(tex_files) > 1:
-                        logger.debug(f"Cannot find main tex file of {self.arxiv_id} from bbl: There are multiple tex files while no bbl file.")
+                        logger.debug(
+                            f"Cannot find main tex file of {self.arxiv_id} from bbl: There are multiple tex files while no bbl file."
+                        )
                         main_tex = None
                     else:
                         main_tex = tex_files[0]
                 case 1:
-                    main_name = bbl_file[0].replace('.bbl','')
+                    main_name = bbl_file[0].replace(".bbl", "")
                     main_tex = f"{main_name}.tex"
                     if main_tex not in tex_files:
-                        logger.debug(f"Cannot find main tex file of {self.arxiv_id} from bbl: The bbl file does not match any tex file.")
+                        logger.debug(
+                            f"Cannot find main tex file of {self.arxiv_id} from bbl: The bbl file does not match any tex file."
+                        )
                         main_tex = None
                 case _:
-                    logger.debug(f"Cannot find main tex file of {self.arxiv_id} from bbl: There are multiple bbl files.")
+                    logger.debug(
+                        f"Cannot find main tex file of {self.arxiv_id} from bbl: There are multiple bbl files."
+                    )
                     main_tex = None
             if main_tex is None:
-                logger.debug(f"Trying to choose tex file containing the document block as main tex file of {self.arxiv_id}")
-            #read all tex files
+                logger.debug(
+                    f"Trying to choose tex file containing the document block as main tex file of {self.arxiv_id}"
+                )
+            # read all tex files
             file_contents = {}
             for t in tex_files:
                 f = tar.extractfile(t)
-                content = f.read().decode('utf-8',errors='ignore')
-                #remove comments
-                content = re.sub(r'%.*\n', '\n', content)
-                content = re.sub(r'\\begin{comment}.*?\\end{comment}', '', content, flags=re.DOTALL)
-                content = re.sub(r'\\iffalse.*?\\fi', '', content, flags=re.DOTALL)
-                #remove redundant \n
-                content = re.sub(r'\n+', '\n', content)
-                content = re.sub(r'\\\\', '', content)
-                #remove consecutive spaces
-                content = re.sub(r'[ \t\r\f]{3,}', ' ', content)
-                if main_tex is None and re.search(r'\\begin\{document\}', content):
+                content = f.read().decode("utf-8", errors="ignore")
+                # remove comments
+                content = re.sub(r"%.*\n", "\n", content)
+                content = re.sub(
+                    r"\\begin{comment}.*?\\end{comment}", "", content, flags=re.DOTALL
+                )
+                content = re.sub(r"\\iffalse.*?\\fi", "", content, flags=re.DOTALL)
+                # remove redundant \n
+                content = re.sub(r"\n+", "\n", content)
+                content = re.sub(r"\\\\", "", content)
+                # remove consecutive spaces
+                content = re.sub(r"[ \t\r\f]{3,}", " ", content)
+                if main_tex is None and re.search(r"\\begin\{document\}", content):
                     main_tex = t
                     logger.debug(f"Choose {t} as main tex file of {self.arxiv_id}")
                 file_contents[t] = content
-            
+
             if main_tex is not None:
-                main_source:str = file_contents[main_tex]
-                #find and replace all included sub-files
-                include_files = re.findall(r'\\input\{(.+?)\}', main_source) + re.findall(r'\\include\{(.+?)\}', main_source)
+                main_source: str = file_contents[main_tex]
+                # find and replace all included sub-files
+                include_files = re.findall(
+                    r"\\input\{(.+?)\}", main_source
+                ) + re.findall(r"\\include\{(.+?)\}", main_source)
                 for f in include_files:
-                    if not f.endswith('.tex'):
-                        file_name = f + '.tex'
+                    if not f.endswith(".tex"):
+                        file_name = f + ".tex"
                     else:
                         file_name = f
-                    main_source = main_source.replace(f'\\input{{{f}}}', file_contents.get(file_name, ''))
+                    main_source = main_source.replace(
+                        f"\\input{{{f}}}", file_contents.get(file_name, "")
+                    )
                 file_contents["all"] = main_source
             else:
-                logger.debug(f"Failed to find main tex file of {self.arxiv_id}: No tex file containing the document block.")
+                logger.debug(
+                    f"Failed to find main tex file of {self.arxiv_id}: No tex file containing the document block."
+                )
                 file_contents["all"] = None
         return file_contents
-    
+
     @property
     def tldr(self) -> str:
         # introduction = ""
@@ -171,7 +200,7 @@ class ArxivPaper:
         #         conclusion = match.group(0)
         # llm = get_llm()
         # prompt = """Given the title, abstract, introduction and the conclusion (if any) of a paper in latex format, generate a one-sentence TLDR summary in __LANG__:
-        
+
         # \\title{__TITLE__}
         # \\begin{abstract}__ABSTRACT__\\end{abstract}
         # __INTRODUCTION__
@@ -188,7 +217,7 @@ class ArxivPaper:
         # prompt_tokens = enc.encode(prompt)
         # prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
         # prompt = enc.decode(prompt_tokens)
-        
+
         # tldr = llm.generate(
         #     messages=[
         #         {
@@ -216,29 +245,129 @@ class ArxivPaper:
         #     else:
         #         logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: No author information found.")
         #         return None
-            # prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
-            # # use gpt-4o tokenizer for estimation
-            # enc = tiktoken.encoding_for_model("gpt-4o")
-            # prompt_tokens = enc.encode(prompt)
-            # prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
-            # prompt = enc.decode(prompt_tokens)
-            # llm = get_llm()
-            # affiliations = llm.generate(
-            #     messages=[
-            #         {
-            #             "role": "system",
-            #             "content": "You are an assistant who perfectly extracts affiliations of authors from the author information of a paper. You should return a python list of affiliations sorted by the author order, like ['TsingHua University','Peking University']. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
-            #         },
-            #         {"role": "user", "content": prompt},
-            #     ]
-            # )
+        # prompt = f"Given the author information of a paper in latex format, extract the affiliations of the authors in a python list format, which is sorted by the author order. If there is no affiliation found, return an empty list '[]'. Following is the author information:\n{information_region}"
+        # # use gpt-4o tokenizer for estimation
+        # enc = tiktoken.encoding_for_model("gpt-4o")
+        # prompt_tokens = enc.encode(prompt)
+        # prompt_tokens = prompt_tokens[:4000]  # truncate to 4000 tokens
+        # prompt = enc.decode(prompt_tokens)
+        # llm = get_llm()
+        # affiliations = llm.generate(
+        #     messages=[
+        #         {
+        #             "role": "system",
+        #             "content": "You are an assistant who perfectly extracts affiliations of authors from the author information of a paper. You should return a python list of affiliations sorted by the author order, like ['TsingHua University','Peking University']. If an affiliation is consisted of multi-level affiliations, like 'Department of Computer Science, TsingHua University', you should return the top-level affiliation 'TsingHua University' only. Do not contain duplicated affiliations. If there is no affiliation found, you should return an empty list [ ]. You should only return the final list of affiliations, and do not return any intermediate results.",
+        #         },
+        #         {"role": "user", "content": prompt},
+        #     ]
+        # )
 
-            # try:
-            #     affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
-            #     affiliations = eval(affiliations)
-            #     affiliations = list(set(affiliations))
-            #     affiliations = [str(a) for a in affiliations]
-            # except Exception as e:
-            #     logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
-            #     return None
+        # try:
+        #     affiliations = re.search(r'\[.*?\]', affiliations, flags=re.DOTALL).group(0)
+        #     affiliations = eval(affiliations)
+        #     affiliations = list(set(affiliations))
+        #     affiliations = [str(a) for a in affiliations]
+        # except Exception as e:
+        #     logger.debug(f"Failed to extract affiliations of {self.arxiv_id}: {e}")
+        #     return None
         return None
+
+
+def get_arxiv_paper(query: str, debug: bool = False) -> list[ArxivPaper]:
+    client = arxiv.Client(num_retries=10, delay_seconds=10)
+    feed = feedparser.parse(f"https://rss.arxiv.org/atom/{query}")
+    if "Feed error for query" in feed.feed.title:
+        raise Exception(f"Invalid ARXIV_QUERY: {query}.")
+    if not debug:
+        papers = []
+        all_paper_ids = [
+            i.id.removeprefix("oai:arXiv.org:")
+            for i in feed.entries
+            if i.arxiv_announce_type == "new"
+        ]
+        bar = tqdm(total=len(all_paper_ids), desc="Retrieving Arxiv papers")
+        for i in range(0, len(all_paper_ids), 50):
+            search = arxiv.Search(id_list=all_paper_ids[i : i + 50])
+            batch = [ArxivPaper(p) for p in client.results(search)]
+            bar.update(len(batch))
+            papers.extend(batch)
+        bar.close()
+
+    else:
+        logger.debug("Retrieve 5 arxiv papers regardless of the date.")
+        search = arxiv.Search(
+            query="cat:cs.AI", sort_by=arxiv.SortCriterion.SubmittedDate
+        )
+        papers = []
+        for i in client.results(search):
+            papers.append(ArxivPaper(i))
+            if len(papers) == 5:
+                break
+
+    return papers
+
+
+def get_zotero_corpus(id: str, key: str, save_to_db: bool = True) -> list[dict]:
+    """
+    Retrieve Zotero corpus and optionally save to local database.
+
+    Args:
+        id: Zotero user ID
+        key: Zotero API key
+        save_to_db: Whether to save corpus to local database
+
+    Returns:
+        Filtered corpus with abstracts
+    """
+    zot = zotero.Zotero(id, "user", key)
+    collections = zot.everything(zot.collections())
+    collections = {c["key"]: c for c in collections}
+
+    # Get all items
+    # TODO: get only the items that are not in the database
+    corpus = zot.everything(
+        zot.items(
+            itemType="conferencePaper || journalArticle || preprint || WebPage || Book"
+        )
+    )
+
+    # Filter to only include items with abstracts
+    corpus_with_abstracts = [c for c in corpus if c["data"]["abstractNote"] != ""]
+
+    logger.info(
+        f"Retrieved {len(corpus)} total items, {len(corpus_with_abstracts)} have abstracts"
+    )
+    # Add collection paths
+    for c in corpus_with_abstracts:
+        paths = [
+            get_collection_path(collections, col) for col in c["data"]["collections"]
+        ]
+        c["paths"] = paths
+
+    # Save to database if requested
+    if save_to_db:
+        # TODO: load only different items and save the different ones
+        try:
+            db = CorpusDatabase()
+            stored_count = db.store_corpus(corpus_with_abstracts)
+            logger.info(f"Successfully stored {stored_count} items in local database")
+
+            # Get database statistics
+            stats = db.get_corpus_stats()
+            logger.info(f"Database stats: {stats}")
+
+        except Exception as e:
+            logger.error(f"Failed to save corpus to database: {e}")
+    return corpus_with_abstracts
+
+
+def get_collection_path(collections: dict, col_key: str) -> str:
+    """Get the full path of a collection."""
+    if p := collections[col_key]["data"]["parentCollection"]:
+        return (
+            get_collection_path(collections, p)
+            + "/"
+            + collections[col_key]["data"]["name"]
+        )
+    else:
+        return collections[col_key]["data"]["name"]
